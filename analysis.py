@@ -1,182 +1,117 @@
 # 23f1000470@ds.study.iitm.ac.in
-# analysis.py
-# Marimo-style notebook (a plain Python file with Jupyter cell markers '# %%')
-# - This file is runnable in Jupyter/VSCode interactive using the '# %%' cells.
-# - It demonstrates variable dependencies across cells, an interactive slider,
-#   dynamic markdown output, and comments documenting data flow.
+# analysis.py — Marimo reactive notebook
+# - Demonstrates relationship between variables with interactive widgets.
+# - Cells are intentionally atomic and document data flow.
 
 # %% [cell 1]
-# Cell 1: Imports and base data generation
+# Cell 1 — base data and constants
 # Data flow note:
-#   - We create a base synthetic dataset here: `x`, `y_base`.
-#   - Downstream cells will depend on these variables and transform them
-#     according to widget inputs (slope, noise).
+#  - This cell constructs the base dataset (x, true_intercept, true_slope, df_base).
+#  - Downstream cells MUST read these names; when widgets change, downstream cells
+#    will re-evaluate automatically in Marimo.
 import numpy as np
 import pandas as pd
+import io, base64
 import matplotlib.pyplot as plt
-from IPython.display import display, Markdown
-import ipywidgets as widgets
-from ipywidgets import Output
 
-# For reproducibility
 RNG_SEED = 42
 np.random.seed(RNG_SEED)
 
-# Generate a simple synthetic dataset
 n = 200
 x = np.linspace(0, 10, n)
 true_intercept = 1.5
 true_slope = 2.0
-# y_base is the deterministic part — downstream code will add widget-controlled noise/slope changes
-y_base = true_intercept + true_slope * x
 
-# Put into dataframe for convenience
+# deterministic part of the data — downstream will add widget-controlled noise/slope
+y_base = true_intercept + true_slope * x
 df_base = pd.DataFrame({"x": x, "y_base": y_base})
 
-# Show a quick preview (will render in notebook)
-display(Markdown("**Cell 1 — base dataset preview (first 5 rows)**"))
-display(df_base.head())
+# small preview (self-documenting)
+print("Cell 1: df_base preview (first 5 rows)")
+print(df_base.head())
+
 
 # %% [cell 2]
-# Cell 2: Interactive controls (slider widget) and plotting output
+# Cell 2 — interactive widgets and computed observations
 # Data flow note:
-#   - This cell reads `df_base`, `y_base` and updates a plot when the widget changes.
-#   - The widget controls `slope_adjust` and `noise_level`. The plot and downstream
-#     summary text depend on these values.
-#
-# Requirements satisfied here:
-#   - Interactive slider widget (ipywidgets)
-#   - Dynamic plot and output
-slope_slider = widgets.FloatSlider(
-    value=1.0,
-    min=0.0,
-    max=4.0,
-    step=0.05,
-    description='Slope mult:',
-    continuous_update=True,
-    readout_format='.2f'
-)
+#  - This cell depends on names from Cell 1: x, true_intercept, true_slope, df_base.
+#  - Widgets control slope multiplier and noise sigma; changing them causes this
+#    cell (and dependent cells) to re-run in Marimo.
+import marimo as mo
 
-noise_slider = widgets.FloatSlider(
-    value=0.5,
-    min=0.0,
-    max=3.0,
-    step=0.05,
-    description='Noise σ:',
-    continuous_update=True,
-    readout_format='.2f'
-)
+# interactive slider: multiplier applied to the true_slope
+slope_mult = mo.ui.slider(0.0, 4.0, value=1.0, step=0.01, label="Slope multiplier")
+# interactive slider: noise standard deviation
+noise_sigma = mo.ui.slider(0.0, 3.0, value=0.5, step=0.01, label="Noise σ")
+# seed control to make noise reproducible (optional)
+seed = mo.ui.number(0, 99999, value=RNG_SEED, label="Random seed (change to re-seed)")
 
-# Output areas: one for the plot, one for dynamic markdown summary
-plot_out = Output()
-md_out = Output()
+# Compute dependent variable y_current (reactive: recomputes when sliders change)
+np.random.seed(int(seed.value))
+current_slope = true_slope * float(slope_mult.value)
+noise = np.random.normal(loc=0.0, scale=float(noise_sigma.value), size=len(df_base))
+y_current = true_intercept + current_slope * df_base["x"].values + noise
 
-def update_plot_and_summary(slope_mult, noise_sigma):
-    """
-    Updates viz and summary based on:
-      - slope_mult: multiplier applied to the base slope (true_slope)
-      - noise_sigma: standard deviation of Gaussian noise added to y
-    Side effects:
-      - writes to `plot_out` and `md_out` Output widgets.
-    """
-    # Compute dependent variable y_current (depends on df_base and widget values)
-    # This demonstrates variable dependency across cells: df_base -> y_current
-    current_slope = true_slope * slope_mult
-    noise = np.random.normal(loc=0.0, scale=noise_sigma, size=len(df_base))
-    y_current = true_intercept + current_slope * df_base["x"].values + noise
+# Create a small helper to render a PNG plot and embed it in markdown
+def plot_to_base64_png(x_vals, y_vals, line_x=None, line_y=None, title=""):
+    fig, ax = plt.subplots(figsize=(6,3.3), tight_layout=True)
+    ax.scatter(x_vals, y_vals, alpha=0.6, s=18, label="observations")
+    if line_x is not None and line_y is not None:
+        ax.plot(line_x, line_y, linewidth=2.0, label="model (no noise)")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_title(title)
+    ax.legend()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=90)
+    plt.close(fig)
+    buf.seek(0)
+    b64 = base64.b64encode(buf.read()).decode("ascii")
+    return b64
 
-    # prepare a temporary dataframe for display / diagnostics
-    df_current = df_base.copy()
-    df_current["y_current"] = y_current
+# prepare line (no-noise) for visual reference
+line_y = true_intercept + current_slope * df_base["x"].values
+img_b64 = plot_to_base64_png(df_base["x"].values, y_current, line_x=df_base["x"].values, line_y=line_y,
+                             title=f"Interactive relationship (slope={current_slope:.3f}, noise={float(noise_sigma.value):.3f})")
 
-    # Update the plot
-    with plot_out:
-        plot_out.clear_output(wait=True)
-        fig, ax = plt.subplots(figsize=(7, 4))
-        ax.scatter(df_current["x"], df_current["y_current"], alpha=0.6, label="observations")
-        ax.plot(df_current["x"], true_intercept + current_slope * df_current["x"], label="model (no noise)", linewidth=2)
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.set_title(f"Interactive relationship (slope={current_slope:.2f}, noise={noise_sigma:.2f})")
-        ax.legend()
-        plt.show()
+# Dynamic markdown: shows widget states, summary stats and embeds the plot
+mo.md(f"""
+## Cell 2 — Controls & Visualization
 
-    # Compute summary statistics and show dynamic markdown
-    with md_out:
-        md_out.clear_output(wait=True)
-        # Basic linear regression fit (least squares) to show how slope estimate changes
-        A = np.vstack([df_current["x"].values, np.ones(len(df_current))]).T
-        m_hat, b_hat = np.linalg.lstsq(A, df_current["y_current"], rcond=None)[0]
-        mse = np.mean((df_current["y_current"] - (m_hat * df_current["x"].values + b_hat))**2)
+- **Slope multiplier (widget):** `{slope_mult}`  
+- **Noise σ (widget):** `{noise_sigma}`  
+- **Random seed (widget):** `{seed}`
 
-        summary_md = f"""
-**Dynamic summary**
-- Requested slope multiplier: **{slope_mult:.2f}** → current model slope = **{current_slope:.2f**}  
-- Estimated slope (OLS fit): **{m_hat:.3f}**  
-- Estimated intercept (OLS fit): **{b_hat:.3f}**  
-- Mean squared error: **{mse:.3f}**
+**Computed values (live):**
+- effective slope = **{current_slope:.4f}**
+- first 5 y_current values = `{[float(v) for v in y_current[:5]]}`
 
-(These numbers update whenever you move the sliders.)
-"""
-        display(Markdown(summary_md))
+**Plot (updates when sliders change):**  
+<img src="data:image/png;base64,{img_b64}" alt="plot" style="max-width:100%; border-radius:6px;">
 
-# Wire widgets to update function with interactive.observe or interactive_output
-ui = widgets.HBox([slope_slider, noise_slider])
-out = widgets.VBox([plot_out, md_out])
+(Notes: this cell reads `df_base` from Cell 1 and writes `y_current` which other cells may consume.)
+""")
 
-def _on_change(change):
-    # We ignore the `change` payload and just use current values
-    update_plot_and_summary(slope_slider.value, noise_slider.value)
-
-# Attach handlers
-slope_slider.observe(_on_change, names='value')
-noise_slider.observe(_on_change, names='value')
-
-# Initialize once
-update_plot_and_summary(slope_slider.value, noise_slider.value)
-
-# Display the UI for the user
-display(Markdown("## Cell 2 — Interactive controls and visualization"))
-display(ui)
-display(out)
 
 # %% [cell 3]
-# Cell 3: Downstream analysis that depends on the widget-controlled state
+# Cell 3 — derived metrics and downstream analysis (depends on Cell 2)
 # Data flow note:
-#   - This cell demonstrates additional computations that read the *current* slider
-#     values and compute a derived metric: an SNR-like ratio and a simple diagnostic table.
-#   - It depends on slope_slider.value and noise_slider.value defined above (variable dependency).
-#
-# Important: In a linear, single-file Marimo-style notebook, execution order matters:
-#   - Run Cell 1 -> Cell 2 -> Cell 3 for expected behavior.
-display(Markdown("## Cell 3 — Derived metrics (dependent on widget state)"))
+#  - This cell reads y_current (from Cell 2) and computes an OLS fit + MSE.
+#  - If sliders in Cell 2 change, this cell will re-run automatically in Marimo.
+A = np.vstack([df_base["x"].values, np.ones(len(df_base))]).T
+m_hat, b_hat = np.linalg.lstsq(A, y_current, rcond=None)[0]
+mse = np.mean((y_current - (m_hat * df_base["x"].values + b_hat))**2)
 
-def derived_metrics(slope_mult, noise_sigma):
-    # Effective slope
-    eff_slope = true_slope * slope_mult
-    # approximate signal amplitude (slope * range of x)
-    signal_amp = eff_slope * (df_base["x"].max() - df_base["x"].min())
-    # approximate SNR-like measure: signal_amp / (3 * noise_sigma)  (3σ as typical spread)
-    snr_like = signal_amp / (3 * noise_sigma) if noise_sigma > 0 else np.inf
+# Show results in dynamic markdown so users immediately see effect of widgets
+mo.md(f"""
+## Cell 3 — Downstream analysis (OLS & diagnostics)
 
-    metrics = {
-        "effective_slope": eff_slope,
-        "signal_amplitude": signal_amp,
-        "noise_std": noise_sigma,
-        "snr_like": snr_like
-    }
-    return metrics
+- Estimated slope (OLS): **{m_hat:.4f}**  
+- Estimated intercept (OLS): **{b_hat:.4f}**  
+- Mean squared error: **{mse:.6f}**
 
-metrics = derived_metrics(slope_slider.value, noise_slider.value)
-metrics_df = pd.DataFrame([metrics]).T
-metrics_df.columns = ["value"]
-
-display(Markdown("**Derived metrics table**"))
-display(metrics_df)
-
-display(Markdown(
-    "### Notes on data flow\n"
-    "- `df_base`, `true_slope`, and `true_intercept` are created in Cell 1.\n"
-    "- Cell 2 reads those and produces `y_current` depending on widget inputs (`slope_slider`, `noise_slider`).\n"
-    "- Cell 3 reads the current widget values (so it must be executed after Cell 2 in an interactive run) and computes derived metrics.\n"
-))
+**Data flow recap**
+- Cell 1 creates `df_base`, `true_slope`, `true_intercept`.
+- Cell 2 reads those and produces `y_current` using widget values: `slope_mult`, `noise_sigma`, `seed`.
+- Cell 3 reads `y_current` and computes OLS / diagnostics.
+""")
